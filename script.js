@@ -2,9 +2,9 @@ const $ = (s) => document.querySelector(s);
 const money = (value) => Number(value).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const now = new Date();
 const current = now.toISOString().slice(0, 7);
-const authKey = "meuFinanceiroUsers";
+const supabase = window.supabase.createClient("https://sbwtvvtyjtzouokugrxb.supabase.co", "sb_publishable_ao5ts1bdB_9sSXpaL_HBKQ_e6jaVZ-N");
 let authMode = "login";
-let activeUser = JSON.parse(localStorage.getItem("meuFinanceiroSession") || "null");
+let activeUser = null;
 let entries = JSON.parse(localStorage.getItem("meuFinanceiro") || "[]");
 let payments = JSON.parse(localStorage.getItem("meuFinanceiroPayments") || '["Dinheiro","PIX","Cartão de crédito","Cartão de débito"]');
 let categories = JSON.parse(localStorage.getItem("meuFinanceiroCategories") || '{"despesa":["Alimentação","Moradia","Transporte","Saúde"],"receita":["Salário","Freelance","Outros"],"investimento":["Renda fixa","Ações","Fundos"]}');
@@ -14,7 +14,9 @@ entries = entries.map((entry) => entry.type === "fatura" ? { ...entry, type: "de
 const inMonth = (entry, month) => entry.date.slice(0, 7) === month;
 const sum = (items) => items.reduce((total, item) => total + Number(item.amount), 0);
 function notice(text) { $("#toast").textContent = text; $("#toast").classList.add("show"); setTimeout(() => $("#toast").classList.remove("show"), 2200); }
-function save() { localStorage.setItem("meuFinanceiro", JSON.stringify(entries)); localStorage.setItem("meuFinanceiroPayments", JSON.stringify(payments)); localStorage.setItem("meuFinanceiroCategories", JSON.stringify(categories)); }
+function save() { localStorage.setItem("meuFinanceiro", JSON.stringify(entries)); localStorage.setItem("meuFinanceiroPayments", JSON.stringify(payments)); localStorage.setItem("meuFinanceiroCategories", JSON.stringify(categories)); if (activeUser?.id) void syncRemote(); }
+async function syncRemote() { const userId = activeUser.id; const { error: removeError } = await supabase.from("finance_entries").delete().eq("user_id", userId); if (removeError) return console.error(removeError); const rows = entries.map((entry) => ({ id: String(entry.id), user_id: userId, data: entry })); if (rows.length) { const { error } = await supabase.from("finance_entries").insert(rows); if (error) return console.error(error); } const { error } = await supabase.from("finance_settings").upsert({ user_id: userId, payments, categories }); if (error) console.error(error); }
+async function loadRemote() { const [{ data: rows, error: entriesError }, { data: settings, error: settingsError }] = await Promise.all([supabase.from("finance_entries").select("data").eq("user_id", activeUser.id), supabase.from("finance_settings").select("payments,categories").eq("user_id", activeUser.id).maybeSingle()]); if (entriesError || settingsError) { notice("Não foi possível sincronizar seus dados agora."); return; } if (rows?.length) entries = rows.map((row) => row.data); else if (entries.length) await syncRemote(); if (settings) { payments = settings.payments || payments; categories = settings.categories || categories; } else await syncRemote(); }
 
 function setAuthMode(mode) {
   authMode = mode;
@@ -47,6 +49,34 @@ $("#loginForm").onsubmit = (event) => {
   localStorage.setItem("meuFinanceiroSession", JSON.stringify(activeUser)); showApp();
 };
 $("#logout").onclick = () => { localStorage.removeItem("meuFinanceiroSession"); activeUser = null; $("#app").hidden = true; $("#authScreen").hidden = false; $("#loginForm").reset(); setAuthMode("login"); };
+
+async function showApp() {
+  document.body.classList.remove("login-open");
+  $("#authScreen").hidden = true; $("#app").hidden = false;
+  $("#pageTitle").textContent = `Olá, ${(activeUser.name || activeUser.email).split(" ")[0]} 👋`;
+  await loadRemote();
+  render();
+}
+$("#loginForm").onsubmit = async (event) => {
+  event.preventDefault();
+  const email = $("#authEmail").value.trim().toLowerCase();
+  const password = $("#authPassword").value;
+  if (authMode === "register") {
+    const name = $("#authName").value.trim();
+    const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { name } } });
+    if (error) { $("#authMessage").textContent = error.message; return; }
+    if (!data.session) { $("#authMessage").textContent = "Conta criada. Confirme seu e-mail para entrar."; return; }
+    activeUser = { id: data.user.id, email, name };
+    await supabase.from("profiles").upsert({ id: activeUser.id, name });
+  } else {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) { $("#authMessage").textContent = "E-mail ou senha inválidos."; return; }
+    activeUser = { id: data.user.id, email: data.user.email, name: data.user.user_metadata.name || data.user.email };
+  }
+  await supabase.from("profiles").upsert({ id: activeUser.id, name: activeUser.name || "" });
+  await showApp();
+};
+$("#logout").onclick = async () => { await supabase.auth.signOut(); activeUser = null; document.body.classList.add("login-open"); $("#app").hidden = true; $("#authScreen").hidden = false; $("#loginForm").reset(); setAuthMode("login"); };
 
 function chart(income, paid, investments, result) {
   const movements = [{ label: "Receitas", value: income, color: "#23b981" }, { label: "Despesas pagas", value: paid, color: "#ef6267" }, { label: "Investimentos", value: investments, color: "#4c8ee7" }];
@@ -106,4 +136,10 @@ $("#paymentForm").onsubmit = (event) => { event.preventDefault(); const payment 
 $("#categoryForm").onsubmit = (event) => { event.preventDefault(); const type = $("#categoryType").value; const category = $("#categoryName").value.trim(); if (category && !categories[type].includes(category)) { categories[type].push(category); $("#categoryName").value = ""; render(); notice("Categoria adicionada."); } };
 $("#downloadReport").onclick = () => { const month = $("#reportMonth").value; const rows = [["Relatório financeiro", month], [], ["Data", "Tipo", "Descrição", "Categoria", "Status", "Parcelas", "Valor"], ...entries.filter((entry) => inMonth(entry, month)).map((entry) => [entry.date, entry.type, entry.description, entry.category, entry.status || "", entry.installmentTotal ? `${entry.installmentNumber}/${entry.installmentTotal}` : "", entry.amount.toFixed(2)])]; const csv = "\ufeff" + rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(";")).join("\n"); const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `relatorio-${month}.csv`; link.click(); URL.revokeObjectURL(url); };
 ["dashboardMonth", "expenseMonth", "reportMonth"].forEach((id) => $("#" + id).value = current);
-if (activeUser) showApp();
+supabase.auth.getSession().then(({ data: { session } }) => {
+  if (!session) return;
+  const user = session.user;
+  activeUser = { id: user.id, email: user.email, name: user.user_metadata.name || user.email };
+  showApp();
+});
+if (!activeUser) document.body.classList.add("login-open");
