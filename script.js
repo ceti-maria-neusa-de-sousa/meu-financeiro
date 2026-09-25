@@ -1,319 +1,109 @@
-const $ = (s) => document.querySelector(s),
-  money = (v) =>
-    v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }),
-  now = new Date(),
-  current = now.toISOString().slice(0, 7);
-let entries = JSON.parse(localStorage.getItem("meuFinanceiro") || "[]"),
-  payments = JSON.parse(
-    localStorage.getItem("meuFinanceiroPayments") ||
-      '["Dinheiro","PIX","Cartão de crédito","Cartão de débito"]',
-  ),
-  categories = JSON.parse(
-    localStorage.getItem("meuFinanceiroCategories") ||
-      '{"despesa":["Alimentação","Moradia","Transporte","Saúde"],"receita":["Salário","Freelance","Outros"],"investimento":["Renda fixa","Ações","Fundos"]}',
-  ),
-  filter = "all";
-entries = entries.map((x) =>
-  x.type === "fatura"
-    ? {
-        ...x,
-        type: "despesa",
-        status: "unpaid",
-        paymentMethod: "Cartão de crédito",
-      }
-    : { ...x, status: x.type === "despesa" ? x.status || "paid" : x.status },
-);
-const inMonth = (x, m) => x.date.slice(0, 7) === m,
-  sum = (a) => a.reduce((n, x) => n + x.amount, 0),
-  notice = (t) => {
-    $("#toast").textContent = t;
-    $("#toast").classList.add("show");
-    setTimeout(() => $("#toast").classList.remove("show"), 2200);
-  };
-function chart(income, expenses, result) {
-  const balance = Math.abs(result);
-  const total = income + expenses + balance;
+const $ = (s) => document.querySelector(s);
+const money = (value) => Number(value).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const now = new Date();
+const current = now.toISOString().slice(0, 7);
+const authKey = "meuFinanceiroUsers";
+let authMode = "login";
+let activeUser = JSON.parse(localStorage.getItem("meuFinanceiroSession") || "null");
+let entries = JSON.parse(localStorage.getItem("meuFinanceiro") || "[]");
+let payments = JSON.parse(localStorage.getItem("meuFinanceiroPayments") || '["Dinheiro","PIX","Cartão de crédito","Cartão de débito"]');
+let categories = JSON.parse(localStorage.getItem("meuFinanceiroCategories") || '{"despesa":["Alimentação","Moradia","Transporte","Saúde"],"receita":["Salário","Freelance","Outros"],"investimento":["Renda fixa","Ações","Fundos"]}');
+let filter = "all";
 
-  if (!total) {
-    $("#monthChart").innerHTML =
-      '<p class="chart-empty">Adicione movimentações para visualizar o resumo.</p>';
-    return;
+entries = entries.map((entry) => entry.type === "fatura" ? { ...entry, type: "despesa", status: "unpaid", paymentMethod: "Cartão de crédito" } : { ...entry, status: entry.type === "despesa" ? entry.status || "paid" : entry.status });
+const inMonth = (entry, month) => entry.date.slice(0, 7) === month;
+const sum = (items) => items.reduce((total, item) => total + Number(item.amount), 0);
+function notice(text) { $("#toast").textContent = text; $("#toast").classList.add("show"); setTimeout(() => $("#toast").classList.remove("show"), 2200); }
+function save() { localStorage.setItem("meuFinanceiro", JSON.stringify(entries)); localStorage.setItem("meuFinanceiroPayments", JSON.stringify(payments)); localStorage.setItem("meuFinanceiroCategories", JSON.stringify(categories)); }
+
+function setAuthMode(mode) {
+  authMode = mode;
+  document.querySelectorAll(".auth-tab").forEach((button) => button.classList.toggle("on", button.dataset.authMode === mode));
+  $(".register-only").hidden = mode !== "register";
+  $("#authName").required = mode === "register";
+  $("#authSubmit").textContent = mode === "register" ? "Criar conta e entrar" : "Entrar na plataforma";
+  $("#authPassword").autocomplete = mode === "register" ? "new-password" : "current-password";
+  $("#authMessage").textContent = "";
+}
+function showApp() {
+  $("#authScreen").hidden = true; $("#app").hidden = false;
+  $("#pageTitle").textContent = `Olá, ${(activeUser.name || activeUser.email).split(" ")[0]} 👋`;
+  render();
+}
+document.querySelectorAll(".auth-tab").forEach((button) => button.onclick = () => setAuthMode(button.dataset.authMode));
+$("#loginForm").onsubmit = (event) => {
+  event.preventDefault();
+  const email = $("#authEmail").value.trim().toLowerCase();
+  const password = $("#authPassword").value;
+  const users = JSON.parse(localStorage.getItem(authKey) || "[]");
+  if (authMode === "register") {
+    if (users.some((user) => user.email === email)) { $("#authMessage").textContent = "Já existe uma conta com este e-mail."; return; }
+    activeUser = { name: $("#authName").value.trim(), email, password };
+    users.push(activeUser); localStorage.setItem(authKey, JSON.stringify(users));
+  } else {
+    activeUser = users.find((user) => user.email === email && user.password === password);
+    if (!activeUser) { $("#authMessage").textContent = "E-mail ou senha não encontrados. Crie uma conta para continuar."; return; }
   }
+  localStorage.setItem("meuFinanceiroSession", JSON.stringify(activeUser)); showApp();
+};
+$("#logout").onclick = () => { localStorage.removeItem("meuFinanceiroSession"); activeUser = null; $("#app").hidden = true; $("#authScreen").hidden = false; $("#loginForm").reset(); setAuthMode("login"); };
 
-  const incomeEnd = (income / total) * 100;
-  const expenseEnd = incomeEnd + (expenses / total) * 100;
-  const balanceLabel = result < 0 ? "Saldo negativo" : "Saldo líquido";
-  const balanceColor = result < 0 ? "#d94d59" : "#4c8ee7";
-  const gradient = `conic-gradient(#23b981 0 ${incomeEnd}%, #ef6267 ${incomeEnd}% ${expenseEnd}%, ${balanceColor} ${expenseEnd}% 100%)`;
-
-  $("#monthChart").innerHTML = `
-    <div class="pie" style="background:${gradient}">
-      <div class="pie-center">
-        <span>${balanceLabel}</span>
-        <strong>${money(result)}</strong>
-      </div>
-    </div>
-    <div class="pie-legend">
-      <div><i class="income-dot"></i><span>Receitas</span><b>${money(income)}</b></div>
-      <div><i class="expense-dot"></i><span>Despesas pagas</span><b>${money(expenses)}</b></div>
-      <div><i class="${result < 0 ? "negative" : "balance-slice"}"></i><span>${balanceLabel}</span><b>${money(result)}</b></div>
-    </div>`;
+function chart(income, paid, investments, result) {
+  const movements = [{ label: "Receitas", value: income, color: "#23b981" }, { label: "Despesas pagas", value: paid, color: "#ef6267" }, { label: "Investimentos", value: investments, color: "#4c8ee7" }];
+  const total = sum(movements);
+  if (!total) { $("#monthChart").innerHTML = '<p class="chart-empty">Adicione movimentações para visualizar o resumo.</p>'; return; }
+  let point = 0;
+  const slices = movements.map((item) => { const start = point; point += item.value / total * 100; return `${item.color} ${start}% ${point}%`; }).join(", ");
+  $("#monthChart").innerHTML = `<div class="pie" style="background:conic-gradient(${slices})"><div class="pie-center"><span>Saldo do mês</span><strong class="${result < 0 ? "negative-text" : ""}">${money(result)}</strong></div></div><div class="pie-legend">${movements.map((item) => `<div><i style="background:${item.color}"></i><span>${item.label}</span><b>${money(item.value)}</b><small>${Math.round(item.value / total * 100)}%</small></div>`).join("")}</div>`;
 }
 function totals() {
-  let a = entries.filter((x) => inMonth(x, $("#dashboardMonth").value)),
-    income = sum(a.filter((x) => x.type === "receita")),
-    paid = sum(a.filter((x) => x.type === "despesa" && x.status === "paid")),
-    unpaid = sum(
-      a.filter((x) => x.type === "despesa" && x.status === "unpaid"),
-    ),
-    invest = sum(a.filter((x) => x.type === "investimento")),
-    result = income - paid - invest;
-  $("#incomeTotal").textContent = money(income);
-  $("#expenseTotal").textContent = money(paid);
-  $("#billTotal").textContent = money(unpaid);
-  $("#investmentTotal").textContent = money(invest);
-  $("#balance").textContent = money(result);
-  $("#balanceHint").textContent =
-    result < 0
-      ? "Atenção: você ficou no vermelho neste mês."
-      : "Você está no positivo neste mês.";
+  const selected = entries.filter((entry) => inMonth(entry, $("#dashboardMonth").value));
+  const income = sum(selected.filter((entry) => entry.type === "receita"));
+  const paid = sum(selected.filter((entry) => entry.type === "despesa" && entry.status === "paid"));
+  const unpaid = sum(selected.filter((entry) => entry.type === "despesa" && entry.status === "unpaid"));
+  const investments = sum(selected.filter((entry) => entry.type === "investimento"));
+  const result = income - paid - investments;
+  $("#incomeTotal").textContent = money(income); $("#expenseTotal").textContent = money(paid); $("#billTotal").textContent = money(unpaid); $("#investmentTotal").textContent = money(investments); $("#balance").textContent = money(result);
+  $("#balanceHint").textContent = result < 0 ? "Atenção: você ficou no vermelho neste mês." : "Você está no positivo neste mês.";
   $(".balance").classList.toggle("negative", result < 0);
-  $("#monthStatus").textContent = unpaid
-    ? `${money(unpaid)} pendente${unpaid === 1 ? "" : "s"}.`
-    : "Sem despesas pendentes.";
-  $("#summaryMessage").textContent = a.length
-    ? `Resultado do mês: ${money(result)}. Despesas não pagas aparecem separadamente.`
-    : "Nenhuma movimentação no mês selecionado.";
-  chart(income, paid, result);
+  $("#monthStatus").textContent = unpaid ? `${money(unpaid)} em despesas pendentes.` : "Sem despesas pendentes.";
+  $("#summaryMessage").textContent = selected.length ? `Saldo atual: ${money(result)}. O gráfico mostra a distribuição das movimentações registradas.` : "Nenhuma movimentação no mês selecionado.";
+  chart(income, paid, investments, result);
 }
-function card(x) {
-  let icon = { receita: "↗", despesa: "↘", investimento: "◈" }[x.type],
-    parcel =
-      x.installmentTotal > 1
-        ? ` · ${x.installmentNumber}/${x.installmentTotal}`
-        : "",
-    yieldText = x.yieldRate
-      ? ` · rendimento: ${x.yieldRate}% (${money((x.amount * x.yieldRate) / 100)})`
-      : "";
-  return `<article class="record ${x.type}"><i>${icon}</i><div><strong>${x.description}</strong><small>${x.category} · ${new Date(x.date + "T12:00").toLocaleDateString("pt-BR")}${parcel}${x.paymentMethod ? " · " + x.paymentMethod : ""}${yieldText}</small></div>${x.type === "despesa" ? `<button class="status ${x.status}" data-toggle="${x.id}">${x.status === "paid" ? "Paga" : "Não paga"}</button>` : ""}<b>${x.type === "receita" ? "+ " : "− "}${money(x.amount)}</b><button data-delete="${x.id}">×</button></article>`;
+function card(entry) {
+  const icon = { receita: "↗", despesa: "↘", investimento: "◈" }[entry.type];
+  const parcel = entry.installmentTotal > 1 ? ` · ${entry.installmentNumber}/${entry.installmentTotal}` : "";
+  const yieldText = entry.yieldRate ? ` · rendimento: ${entry.yieldRate}% (${money(entry.amount * entry.yieldRate / 100)})` : "";
+  const payment = entry.type === "despesa" ? `<button class="status ${entry.status}" data-toggle="${entry.id}" title="${entry.status === "paid" ? "Desfazer pagamento" : "Marcar como paga"}">${entry.status === "paid" ? "✓ Paga" : "Pagar agora"}</button>` : "";
+  return `<article class="record ${entry.type}"><i>${icon}</i><div><strong>${entry.description}</strong><small>${entry.category} · ${new Date(entry.date + "T12:00").toLocaleDateString("pt-BR")}${parcel}${entry.paymentMethod ? " · " + entry.paymentMethod : ""}${yieldText}</small></div>${payment}<b>${entry.type === "receita" ? "+ " : "− "}${money(entry.amount)}</b><button aria-label="Excluir ${entry.description}" data-delete="${entry.id}">×</button></article>`;
 }
 function ui() {
-  let t = $("#entryType").value;
-  $("#paymentMethod").innerHTML = payments
-    .map((x) => `<option>${x}</option>`)
-    .join("");
-  $("#paymentList").innerHTML = payments
-    .map(
-      (x, i) =>
-        `<div class="payment-item">${x}<button data-payment="${i}">×</button></div>`,
-    )
-    .join("");
-  $("#category").innerHTML = (categories[t] || [])
-    .map((x) => `<option>${x}</option>`)
-    .join("");
-  $("#categoryList").innerHTML = Object.entries(categories)
-    .flatMap(([type, list]) =>
-      list.map(
-        (x, i) =>
-          `<div class="payment-item"><span>${type}: ${x}</span><button data-category-delete="${type}|${i}">×</button></div>`,
-      ),
-    )
-    .join("");
+  const type = $("#entryType").value;
+  $("#paymentMethod").innerHTML = payments.map((item) => `<option>${item}</option>`).join("");
+  $("#paymentList").innerHTML = payments.map((item, index) => `<div class="payment-item">${item}<button data-payment="${index}">×</button></div>`).join("");
+  $("#category").innerHTML = (categories[type] || []).map((item) => `<option>${item}</option>`).join("");
+  $("#categoryList").innerHTML = Object.entries(categories).flatMap(([type, list]) => list.map((item, index) => `<div class="payment-item"><span>${type}: ${item}</span><button data-category-delete="${type}|${index}">×</button></div>`)).join("");
 }
 function render() {
   entries.sort((a, b) => b.date.localeCompare(a.date));
-  let m = $("#expenseMonth").value,
-    a = entries.filter(
-      (x) =>
-        x.type === "despesa" &&
-        inMonth(x, m) &&
-        (filter === "all" || x.status === filter),
-    );
-  $("#despesaList").innerHTML =
-    a.map(card).join("") ||
-    '<p class="empty">Nenhuma despesa para este filtro e mês.</p>';
-  ["receita", "investimento"].forEach(
-    (t) =>
-      ($("#" + t + "List").innerHTML =
-        entries
-          .filter((x) => x.type === t)
-          .map(card)
-          .join("") || '<p class="empty">Nenhum registro ainda.</p>'),
-  );
-  $("#recentList").innerHTML =
-    entries.slice(0, 4).map(card).join("") ||
-    '<p class="empty">Nenhuma movimentação registrada.</p>';
-  ui();
-  totals();
-  localStorage.setItem("meuFinanceiro", JSON.stringify(entries));
-  localStorage.setItem("meuFinanceiroPayments", JSON.stringify(payments));
-  localStorage.setItem("meuFinanceiroCategories", JSON.stringify(categories));
+  const month = $("#expenseMonth").value;
+  const expenses = entries.filter((entry) => entry.type === "despesa" && inMonth(entry, month) && (filter === "all" || filter === "installments" ? (filter !== "installments" || entry.installmentTotal > 1) : entry.status === filter));
+  $("#despesaList").innerHTML = expenses.map(card).join("") || '<p class="empty">Nenhuma despesa para este filtro e mês.</p>';
+  ["receita", "investimento"].forEach((type) => $("#" + type + "List").innerHTML = entries.filter((entry) => entry.type === type).map(card).join("") || '<p class="empty">Nenhum registro ainda.</p>');
+  $("#recentList").innerHTML = entries.slice(0, 4).map(card).join("") || '<p class="empty">Nenhuma movimentação registrada.</p>';
+  ui(); totals(); save();
 }
-function plusMonths(d, n) {
-  let x = new Date(d + "T12:00");
-  x.setMonth(x.getMonth() + n);
-  return x.toISOString().slice(0, 10);
-}
-document.querySelectorAll("nav a").forEach(
-  (a) =>
-    (a.onclick = () => {
-      document
-        .querySelectorAll(".view")
-        .forEach((x) => x.classList.remove("active"));
-      $("#" + a.dataset.view).classList.add("active");
-      document
-        .querySelectorAll("nav a")
-        .forEach((x) => x.classList.remove("on"));
-      a.classList.add("on");
-      $("#pageTitle").textContent = a.textContent;
-    }),
-);
-document.querySelectorAll(".open").forEach(
-  (b) =>
-    (b.onclick = () => {
-      let t = b.dataset.type;
-      $("#entryForm").reset();
-      $("#entryType").value = t;
-      $("#formTitle").textContent = {
-        receita: "Nova receita",
-        despesa: "Nova despesa",
-        investimento: "Novo investimento",
-      }[t];
-      $("#date").value = now.toISOString().slice(0, 10);
-      $("#expenseFields").hidden = t !== "despesa";
-      $("#investmentFields").hidden = t !== "investimento";
-      $("#amountLabel").childNodes[0].nodeValue =
-        t === "despesa" ? "Valor total (R$)" : "Valor (R$)";
-      ui();
-      $("#entryDialog").showModal();
-    }),
-);
+function plusMonths(date, amount) { const value = new Date(date + "T12:00"); value.setMonth(value.getMonth() + amount); return value.toISOString().slice(0, 10); }
+document.querySelectorAll("nav a").forEach((link) => link.onclick = () => { document.querySelectorAll(".view").forEach((view) => view.classList.remove("active")); $("#" + link.dataset.view).classList.add("active"); document.querySelectorAll("nav a").forEach((item) => item.classList.remove("on")); link.classList.add("on"); $("#pageTitle").textContent = link.textContent; });
+document.querySelectorAll(".open").forEach((button) => button.onclick = () => { const type = button.dataset.type; $("#entryForm").reset(); $("#entryType").value = type; $("#formTitle").textContent = ({ receita: "Nova receita", despesa: "Nova despesa", investimento: "Novo investimento" })[type]; $("#date").value = now.toISOString().slice(0, 10); $("#expenseFields").hidden = type !== "despesa"; $("#investmentFields").hidden = type !== "investimento"; $("#amountLabel").childNodes[0].nodeValue = type === "despesa" ? "Valor total (R$)" : "Valor (R$)"; ui(); $("#entryDialog").showModal(); });
 $("#closeDialog").onclick = () => $("#entryDialog").close();
-$("#entryForm").onsubmit = (e) => {
-  e.preventDefault();
-  let type = $("#entryType").value,
-    amount = +$("#amount").value,
-    base = {
-      type,
-      description: $("#description").value.trim(),
-      category: $("#category").value,
-      date: $("#date").value,
-    },
-    date = base.date;
-  if (type === "investimento") base.yieldRate = +$("#yieldRate").value || 0;
-  if (type === "despesa") {
-    let total = Math.max(1, +$("#installments").value || 1),
-      id = Date.now();
-    for (let i = 0; i < total; i++)
-      entries.push({
-        ...base,
-        id: id + i,
-        date: plusMonths(date, i),
-        amount: amount / total,
-        status: $("#status").value,
-        paymentMethod: $("#paymentMethod").value,
-        installmentNumber: i + 1,
-        installmentTotal: total,
-      });
-  } else entries.push({ ...base, id: Date.now(), amount });
-  render();
-  $("#entryDialog").close();
-  notice("Movimentação salva com sucesso!");
-};
-document.addEventListener("click", (e) => {
-  if (e.target.dataset.delete) {
-    entries = entries.filter((x) => x.id != e.target.dataset.delete);
-    render();
-  }
-  if (e.target.dataset.toggle) {
-    let x = entries.find((x) => x.id == e.target.dataset.toggle);
-    x.status = x.status === "paid" ? "unpaid" : "paid";
-    render();
-    notice("Status atualizado.");
-  }
-  if (e.target.dataset.payment !== undefined) {
-    payments.splice(+e.target.dataset.payment, 1);
-    render();
-  }
-  if (e.target.dataset.categoryDelete) {
-    let [t, i] = e.target.dataset.categoryDelete.split("|");
-    categories[t].splice(+i, 1);
-    render();
-  }
-});
-$("#clearData").onclick = () => {
-  if (confirm("Excluir todas as movimentações?")) {
-    entries = [];
-    render();
-  }
-};
-document.querySelectorAll(".filter").forEach(
-  (b) =>
-    (b.onclick = () => {
-      filter = b.dataset.filter;
-      document
-        .querySelectorAll(".filter")
-        .forEach((x) => x.classList.toggle("on", x === b));
-      render();
-    }),
-);
-["dashboardMonth", "expenseMonth"].forEach(
-  (x) => ($("#" + x).onchange = render),
-);
-$("#paymentForm").onsubmit = (e) => {
-  e.preventDefault();
-  let p = $("#paymentName").value.trim();
-  if (p && !payments.includes(p)) {
-    payments.push(p);
-    $("#paymentName").value = "";
-    render();
-    notice("Forma adicionada.");
-  }
-};
-$("#categoryForm").onsubmit = (e) => {
-  e.preventDefault();
-  let t = $("#categoryType").value,
-    c = $("#categoryName").value.trim();
-  if (c && !categories[t].includes(c)) {
-    categories[t].push(c);
-    $("#categoryName").value = "";
-    render();
-    notice("Categoria adicionada.");
-  }
-};
-$("#downloadReport").onclick = () => {
-  let m = $("#reportMonth").value,
-    a = entries.filter((x) => inMonth(x, m)),
-    rows = [
-      ["Relatório financeiro", m],
-      [],
-      ["Data", "Tipo", "Descrição", "Categoria", "Rendimento (%)", "Valor"],
-      ...a.map((x) => [
-        x.date,
-        x.type,
-        x.description,
-        x.category,
-        x.yieldRate || "",
-        x.amount.toFixed(2),
-      ]),
-    ],
-    csv =
-      "\ufeff" +
-      rows
-        .map((r) =>
-          r.map((v) => `"${String(v).replaceAll('"', '""')}"`).join(";"),
-        )
-        .join("\n"),
-    url = URL.createObjectURL(
-      new Blob([csv], { type: "text/csv;charset=utf-8" }),
-    ),
-    link = document.createElement("a");
-  link.href = url;
-  link.download = `relatorio-${m}.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
-};
-["dashboardMonth", "expenseMonth", "reportMonth"].forEach(
-  (x) => ($("#" + x).value = current),
-);
-render();
+$("#entryForm").onsubmit = (event) => { event.preventDefault(); const type = $("#entryType").value; const amount = +$("#amount").value; const base = { type, description: $("#description").value.trim(), category: $("#category").value, date: $("#date").value }; if (type === "investimento") base.yieldRate = +$("#yieldRate").value || 0; if (type === "despesa") { const total = Math.max(1, +$("#installments").value || 1); const id = Date.now(); for (let index = 0; index < total; index++) entries.push({ ...base, id: id + index, date: plusMonths(base.date, index), amount: amount / total, status: $("#status").value, paymentMethod: $("#paymentMethod").value, installmentNumber: index + 1, installmentTotal: total }); } else entries.push({ ...base, id: Date.now(), amount }); render(); $("#entryDialog").close(); notice("Movimentação salva com sucesso!"); };
+document.addEventListener("click", (event) => { const target = event.target; if (target.dataset.delete) { entries = entries.filter((entry) => entry.id != target.dataset.delete); render(); notice("Movimentação excluída."); } if (target.dataset.toggle) { const entry = entries.find((item) => item.id == target.dataset.toggle); entry.status = entry.status === "paid" ? "unpaid" : "paid"; render(); notice(entry.status === "paid" ? "Pagamento confirmado!" : "Pagamento desfeito."); } if (target.dataset.payment !== undefined) { payments.splice(+target.dataset.payment, 1); render(); } if (target.dataset.categoryDelete) { const [type, index] = target.dataset.categoryDelete.split("|"); categories[type].splice(+index, 1); render(); } });
+$("#clearData").onclick = () => { if (confirm("Excluir todas as movimentações?")) { entries = []; render(); notice("Movimentações excluídas."); } };
+document.querySelectorAll(".filter").forEach((button) => button.onclick = () => { filter = button.dataset.filter; document.querySelectorAll(".filter").forEach((item) => item.classList.toggle("on", item === button)); render(); });
+["dashboardMonth", "expenseMonth"].forEach((id) => $("#" + id).onchange = render);
+$("#paymentForm").onsubmit = (event) => { event.preventDefault(); const payment = $("#paymentName").value.trim(); if (payment && !payments.includes(payment)) { payments.push(payment); $("#paymentName").value = ""; render(); notice("Forma adicionada."); } };
+$("#categoryForm").onsubmit = (event) => { event.preventDefault(); const type = $("#categoryType").value; const category = $("#categoryName").value.trim(); if (category && !categories[type].includes(category)) { categories[type].push(category); $("#categoryName").value = ""; render(); notice("Categoria adicionada."); } };
+$("#downloadReport").onclick = () => { const month = $("#reportMonth").value; const rows = [["Relatório financeiro", month], [], ["Data", "Tipo", "Descrição", "Categoria", "Status", "Parcelas", "Valor"], ...entries.filter((entry) => inMonth(entry, month)).map((entry) => [entry.date, entry.type, entry.description, entry.category, entry.status || "", entry.installmentTotal ? `${entry.installmentNumber}/${entry.installmentTotal}` : "", entry.amount.toFixed(2)])]; const csv = "\ufeff" + rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(";")).join("\n"); const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `relatorio-${month}.csv`; link.click(); URL.revokeObjectURL(url); };
+["dashboardMonth", "expenseMonth", "reportMonth"].forEach((id) => $("#" + id).value = current);
+if (activeUser) showApp();
