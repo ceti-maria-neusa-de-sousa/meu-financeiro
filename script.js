@@ -64,7 +64,12 @@ $("#loginForm").onsubmit = async (event) => {
       activeUser = { id: data.user.id, email, name };
     } else {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error || !data.user) { $("#authMessage").textContent = "E-mail ou senha inválidos."; return; }
+      if (error || !data.user) {
+        $("#authMessage").textContent = error?.message === "Email not confirmed"
+          ? "Confirme o e-mail da sua conta antes de entrar."
+          : "E-mail ou senha inválidos.";
+        return;
+      }
       activeUser = { id: data.user.id, email: data.user.email, name: data.user.user_metadata.name || data.user.email };
     }
 
