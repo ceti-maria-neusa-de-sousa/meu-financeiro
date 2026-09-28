@@ -85,13 +85,17 @@ $("#loginForm").onsubmit = async (event) => {
 };
 $("#logout").onclick = async () => { await supabaseClient.auth.signOut(); activeUser = null; document.body.classList.add("login-open"); $("#app").hidden = true; $("#authScreen").hidden = false; $("#loginForm").reset(); setAuthMode("login"); };
 
-function chart(income, paid, investments, result) {
-  const movements = [{ label: "Receitas", value: income, color: "#23b981" }, { label: "Despesas pagas", value: paid, color: "#ef6267" }, { label: "Investimentos", value: investments, color: "#4c8ee7" }];
-  const total = sum(movements);
+function chart(grossBalance, expenses, netBalance) {
+  const movements = [
+    { label: "Saldo bruto", value: grossBalance, color: "#4c8ee7" },
+    { label: "Despesas", value: expenses, color: "#ef6267" },
+    { label: "Saldo líquido", value: netBalance, color: netBalance < 0 ? "#f59e0b" : "#23b981" }
+  ];
+  const total = movements.reduce((totalValue, item) => totalValue + Math.abs(item.value), 0);
   if (!total) { $("#monthChart").innerHTML = '<p class="chart-empty">Adicione movimentações para visualizar o resumo.</p>'; return; }
   let point = 0;
-  const slices = movements.map((item) => { const start = point; point += item.value / total * 100; return `${item.color} ${start}% ${point}%`; }).join(", ");
-  $("#monthChart").innerHTML = `<div class="pie" style="background:conic-gradient(${slices})"><div class="pie-center"><span>Saldo do mês</span><strong class="${result < 0 ? "negative-text" : ""}">${money(result)}</strong></div></div><div class="pie-legend">${movements.map((item) => `<div><i style="background:${item.color}"></i><span>${item.label}</span><b>${money(item.value)}</b><small>${Math.round(item.value / total * 100)}%</small></div>`).join("")}</div>`;
+  const slices = movements.map((item) => { const start = point; point += Math.abs(item.value) / total * 100; return `${item.color} ${start}% ${point}%`; }).join(", ");
+  $("#monthChart").innerHTML = `<div class="pie" style="background:conic-gradient(${slices})"><div class="pie-center"><span>Saldo líquido</span><strong class="${netBalance < 0 ? "negative-text" : ""}">${money(netBalance)}</strong></div></div><div class="pie-legend">${movements.map((item) => `<div><i style="background:${item.color}"></i><span>${item.label}</span><b>${money(item.value)}</b><small>Resumo do mês</small></div>`).join("")}</div>`;
 }
 function totals() {
   const selected = entries.filter((entry) => inMonth(entry, $("#dashboardMonth").value));
@@ -105,7 +109,7 @@ function totals() {
   $(".balance").classList.toggle("negative", result < 0);
   $("#monthStatus").textContent = unpaid ? `${money(unpaid)} em despesas pendentes.` : "Sem despesas pendentes.";
   $("#summaryMessage").textContent = selected.length ? `Saldo atual: ${money(result)}. O gráfico mostra a distribuição das movimentações registradas.` : "Nenhuma movimentação no mês selecionado.";
-  chart(income, paid, investments, result);
+  chart(income, paid + unpaid, result);
 }
 function card(entry) {
   const icon = { receita: "↗", despesa: "↘", investimento: "◈" }[entry.type];
