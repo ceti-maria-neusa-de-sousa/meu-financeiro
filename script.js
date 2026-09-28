@@ -2,7 +2,7 @@ const $ = (s) => document.querySelector(s);
 const money = (value) => Number(value).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const now = new Date();
 const current = now.toISOString().slice(0, 7);
-const supabase = window.supabase.createClient("https://sbwtvvtyjtzouokugrxb.supabase.co", "sb_publishable_ao5ts1bdB_9sSXpaL_HBKQ_e6jaVZ-N");
+const supabaseClient = window.supabase.createClient("https://sbwtvvtyjtzouokugrxb.supabase.co", "sb_publishable_ao5ts1bdB_9sSXpaL_HBKQ_e6jaVZ-N");
 let authMode = "login";
 let activeUser = null;
 let entries = JSON.parse(localStorage.getItem("meuFinanceiro") || "[]");
@@ -15,8 +15,8 @@ const inMonth = (entry, month) => entry.date.slice(0, 7) === month;
 const sum = (items) => items.reduce((total, item) => total + Number(item.amount), 0);
 function notice(text) { $("#toast").textContent = text; $("#toast").classList.add("show"); setTimeout(() => $("#toast").classList.remove("show"), 2200); }
 function save() { localStorage.setItem("meuFinanceiro", JSON.stringify(entries)); localStorage.setItem("meuFinanceiroPayments", JSON.stringify(payments)); localStorage.setItem("meuFinanceiroCategories", JSON.stringify(categories)); if (activeUser?.id) void syncRemote(); }
-async function syncRemote() { const userId = activeUser.id; const { error: removeError } = await supabase.from("finance_entries").delete().eq("user_id", userId); if (removeError) return console.error(removeError); const rows = entries.map((entry) => ({ id: String(entry.id), user_id: userId, data: entry })); if (rows.length) { const { error } = await supabase.from("finance_entries").insert(rows); if (error) return console.error(error); } const { error } = await supabase.from("finance_settings").upsert({ user_id: userId, payments, categories }); if (error) console.error(error); }
-async function loadRemote() { const [{ data: rows, error: entriesError }, { data: settings, error: settingsError }] = await Promise.all([supabase.from("finance_entries").select("data").eq("user_id", activeUser.id), supabase.from("finance_settings").select("payments,categories").eq("user_id", activeUser.id).maybeSingle()]); if (entriesError || settingsError) { notice("Não foi possível sincronizar seus dados agora."); return; } if (rows?.length) entries = rows.map((row) => row.data); else if (entries.length) await syncRemote(); if (settings) { payments = settings.payments || payments; categories = settings.categories || categories; } else await syncRemote(); }
+async function syncRemote() { const userId = activeUser.id; const { error: removeError } = await supabaseClient.from("finance_entries").delete().eq("user_id", userId); if (removeError) return console.error(removeError); const rows = entries.map((entry) => ({ id: String(entry.id), user_id: userId, data: entry })); if (rows.length) { const { error } = await supabaseClient.from("finance_entries").insert(rows); if (error) return console.error(error); } const { error } = await supabaseClient.from("finance_settings").upsert({ user_id: userId, payments, categories }); if (error) console.error(error); }
+async function loadRemote() { const [{ data: rows, error: entriesError }, { data: settings, error: settingsError }] = await Promise.all([supabaseClient.from("finance_entries").select("data").eq("user_id", activeUser.id), supabaseClient.from("finance_settings").select("payments,categories").eq("user_id", activeUser.id).maybeSingle()]); if (entriesError || settingsError) { notice("Não foi possível sincronizar seus dados agora."); return; } if (rows?.length) entries = rows.map((row) => row.data); else if (entries.length) await syncRemote(); if (settings) { payments = settings.payments || payments; categories = settings.categories || categories; } else await syncRemote(); }
 
 function setAuthMode(mode) {
   authMode = mode;
@@ -54,7 +54,7 @@ $("#loginForm").onsubmit = async (event) => {
   try {
     if (authMode === "register") {
       const name = $("#authName").value.trim();
-      const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { name } } });
+      const { data, error } = await supabaseClient.auth.signUp({ email, password, options: { data: { name } } });
       if (error) { $("#authMessage").textContent = error.message; return; }
       if (!data.user) { $("#authMessage").textContent = "Não foi possível criar a conta. Tente novamente."; return; }
       if (!data.session) {
@@ -63,7 +63,7 @@ $("#loginForm").onsubmit = async (event) => {
       }
       activeUser = { id: data.user.id, email, name };
     } else {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
       if (error || !data.user) {
         $("#authMessage").textContent = error?.message === "Email not confirmed"
           ? "Confirme o e-mail da sua conta antes de entrar."
@@ -73,7 +73,7 @@ $("#loginForm").onsubmit = async (event) => {
       activeUser = { id: data.user.id, email: data.user.email, name: data.user.user_metadata.name || data.user.email };
     }
 
-    const { error: profileError } = await supabase.from("profiles").upsert({ id: activeUser.id, name: activeUser.name || "" });
+    const { error: profileError } = await supabaseClient.from("profiles").upsert({ id: activeUser.id, name: activeUser.name || "" });
     if (profileError) console.error("Não foi possível salvar o perfil:", profileError);
     await showApp();
   } catch (error) {
@@ -83,7 +83,7 @@ $("#loginForm").onsubmit = async (event) => {
     submit.disabled = false;
   }
 };
-$("#logout").onclick = async () => { await supabase.auth.signOut(); activeUser = null; document.body.classList.add("login-open"); $("#app").hidden = true; $("#authScreen").hidden = false; $("#loginForm").reset(); setAuthMode("login"); };
+$("#logout").onclick = async () => { await supabaseClient.auth.signOut(); activeUser = null; document.body.classList.add("login-open"); $("#app").hidden = true; $("#authScreen").hidden = false; $("#loginForm").reset(); setAuthMode("login"); };
 
 function chart(income, paid, investments, result) {
   const movements = [{ label: "Receitas", value: income, color: "#23b981" }, { label: "Despesas pagas", value: paid, color: "#ef6267" }, { label: "Investimentos", value: investments, color: "#4c8ee7" }];
