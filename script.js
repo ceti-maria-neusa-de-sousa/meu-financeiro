@@ -27,33 +27,14 @@ function setAuthMode(mode) {
   $("#authPassword").autocomplete = mode === "register" ? "new-password" : "current-password";
   $("#authMessage").textContent = "";
 }
-function showApp() {
-  $("#authScreen").hidden = true; $("#app").hidden = false;
-  $("#pageTitle").textContent = `Olá, ${(activeUser.name || activeUser.email).split(" ")[0]} 👋`;
-  render();
-}
 document.querySelectorAll(".auth-tab").forEach((button) => button.onclick = () => setAuthMode(button.dataset.authMode));
-$("#loginForm").onsubmit = (event) => {
-  event.preventDefault();
-  const email = $("#authEmail").value.trim().toLowerCase();
-  const password = $("#authPassword").value;
-  const users = JSON.parse(localStorage.getItem(authKey) || "[]");
-  if (authMode === "register") {
-    if (users.some((user) => user.email === email)) { $("#authMessage").textContent = "Já existe uma conta com este e-mail."; return; }
-    activeUser = { name: $("#authName").value.trim(), email, password };
-    users.push(activeUser); localStorage.setItem(authKey, JSON.stringify(users));
-  } else {
-    activeUser = users.find((user) => user.email === email && user.password === password);
-    if (!activeUser) { $("#authMessage").textContent = "E-mail ou senha não encontrados. Crie uma conta para continuar."; return; }
-  }
-  localStorage.setItem("meuFinanceiroSession", JSON.stringify(activeUser)); showApp();
-};
-$("#logout").onclick = () => { localStorage.removeItem("meuFinanceiroSession"); activeUser = null; $("#app").hidden = true; $("#authScreen").hidden = false; $("#loginForm").reset(); setAuthMode("login"); };
-
 async function showApp() {
   document.body.classList.remove("login-open");
   $("#authScreen").hidden = true; $("#app").hidden = false;
+  document.querySelectorAll(".view").forEach((view) => view.classList.toggle("active", view.id === "dashboard"));
+  document.querySelectorAll("nav a").forEach((link) => link.classList.toggle("on", link.dataset.view === "dashboard"));
   $("#pageTitle").textContent = `Olá, ${(activeUser.name || activeUser.email).split(" ")[0]} 👋`;
+  render();
   await loadRemote();
   render();
 }
@@ -61,20 +42,41 @@ $("#loginForm").onsubmit = async (event) => {
   event.preventDefault();
   const email = $("#authEmail").value.trim().toLowerCase();
   const password = $("#authPassword").value;
-  if (authMode === "register") {
-    const name = $("#authName").value.trim();
-    const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { name } } });
-    if (error) { $("#authMessage").textContent = error.message; return; }
-    if (!data.session) { $("#authMessage").textContent = "Conta criada. Confirme seu e-mail para entrar."; return; }
-    activeUser = { id: data.user.id, email, name };
-    await supabase.from("profiles").upsert({ id: activeUser.id, name });
-  } else {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) { $("#authMessage").textContent = "E-mail ou senha inválidos."; return; }
-    activeUser = { id: data.user.id, email: data.user.email, name: data.user.user_metadata.name || data.user.email };
+  const submit = $("#authSubmit");
+
+  if (authMode === "register" && password.length < 6) {
+    $("#authMessage").textContent = "A senha precisa ter pelo menos 6 caracteres.";
+    return;
   }
-  await supabase.from("profiles").upsert({ id: activeUser.id, name: activeUser.name || "" });
-  await showApp();
+
+  submit.disabled = true;
+  $("#authMessage").textContent = authMode === "register" ? "Criando sua conta..." : "Entrando...";
+  try {
+    if (authMode === "register") {
+      const name = $("#authName").value.trim();
+      const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { name } } });
+      if (error) { $("#authMessage").textContent = error.message; return; }
+      if (!data.user) { $("#authMessage").textContent = "Não foi possível criar a conta. Tente novamente."; return; }
+      if (!data.session) {
+        $("#authMessage").textContent = "Conta criada! Confirme o e-mail enviado e depois entre com sua senha.";
+        return;
+      }
+      activeUser = { id: data.user.id, email, name };
+    } else {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error || !data.user) { $("#authMessage").textContent = "E-mail ou senha inválidos."; return; }
+      activeUser = { id: data.user.id, email: data.user.email, name: data.user.user_metadata.name || data.user.email };
+    }
+
+    const { error: profileError } = await supabase.from("profiles").upsert({ id: activeUser.id, name: activeUser.name || "" });
+    if (profileError) console.error("Não foi possível salvar o perfil:", profileError);
+    await showApp();
+  } catch (error) {
+    console.error("Erro na autenticação:", error);
+    $("#authMessage").textContent = "Não foi possível conectar ao serviço. Verifique sua internet e tente novamente.";
+  } finally {
+    submit.disabled = false;
+  }
 };
 $("#logout").onclick = async () => { await supabase.auth.signOut(); activeUser = null; document.body.classList.add("login-open"); $("#app").hidden = true; $("#authScreen").hidden = false; $("#loginForm").reset(); setAuthMode("login"); };
 
@@ -136,10 +138,5 @@ $("#paymentForm").onsubmit = (event) => { event.preventDefault(); const payment 
 $("#categoryForm").onsubmit = (event) => { event.preventDefault(); const type = $("#categoryType").value; const category = $("#categoryName").value.trim(); if (category && !categories[type].includes(category)) { categories[type].push(category); $("#categoryName").value = ""; render(); notice("Categoria adicionada."); } };
 $("#downloadReport").onclick = () => { const month = $("#reportMonth").value; const rows = [["Relatório financeiro", month], [], ["Data", "Tipo", "Descrição", "Categoria", "Status", "Parcelas", "Valor"], ...entries.filter((entry) => inMonth(entry, month)).map((entry) => [entry.date, entry.type, entry.description, entry.category, entry.status || "", entry.installmentTotal ? `${entry.installmentNumber}/${entry.installmentTotal}` : "", entry.amount.toFixed(2)])]; const csv = "\ufeff" + rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(";")).join("\n"); const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `relatorio-${month}.csv`; link.click(); URL.revokeObjectURL(url); };
 ["dashboardMonth", "expenseMonth", "reportMonth"].forEach((id) => $("#" + id).value = current);
-supabase.auth.getSession().then(({ data: { session } }) => {
-  if (!session) return;
-  const user = session.user;
-  activeUser = { id: user.id, email: user.email, name: user.user_metadata.name || user.email };
-  showApp();
-});
-if (!activeUser) document.body.classList.add("login-open");
+// Sempre comece pela autenticação; uma sessão persistida não pode abrir o painel sozinha.
+document.body.classList.add("login-open");
