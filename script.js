@@ -14,9 +14,10 @@ entries = entries.map((entry) => entry.type === "fatura" ? { ...entry, type: "de
 const inMonth = (entry, month) => entry.date.slice(0, 7) === month;
 const sum = (items) => items.reduce((total, item) => total + Number(item.amount), 0);
 function notice(text) { $("#toast").textContent = text; $("#toast").classList.add("show"); setTimeout(() => $("#toast").classList.remove("show"), 2200); }
-function save() { localStorage.setItem("meuFinanceiro", JSON.stringify(entries)); localStorage.setItem("meuFinanceiroPayments", JSON.stringify(payments)); localStorage.setItem("meuFinanceiroCategories", JSON.stringify(categories)); if (activeUser?.id) void syncRemote(); }
+function save() { localStorage.setItem("meuFinanceiro", JSON.stringify(entries)); localStorage.setItem("meuFinanceiroPayments", JSON.stringify(payments)); localStorage.setItem("meuFinanceiroCategories", JSON.stringify(categories)); }
+function saveAndSync() { save(); if (activeUser?.id) void syncRemote(); }
 async function syncRemote() { const userId = activeUser.id; const { error: removeError } = await supabaseClient.from("finance_entries").delete().eq("user_id", userId); if (removeError) return console.error(removeError); const rows = entries.map((entry) => ({ id: String(entry.id), user_id: userId, data: entry })); if (rows.length) { const { error } = await supabaseClient.from("finance_entries").insert(rows); if (error) return console.error(error); } const { error } = await supabaseClient.from("finance_settings").upsert({ user_id: userId, payments, categories }); if (error) console.error(error); }
-async function loadRemote() { const [{ data: rows, error: entriesError }, { data: settings, error: settingsError }] = await Promise.all([supabaseClient.from("finance_entries").select("data").eq("user_id", activeUser.id), supabaseClient.from("finance_settings").select("payments,categories").eq("user_id", activeUser.id).maybeSingle()]); if (entriesError || settingsError) { notice("Não foi possível sincronizar seus dados agora."); return; } if (rows?.length) entries = rows.map((row) => row.data); else if (entries.length) await syncRemote(); if (settings) { payments = settings.payments || payments; categories = settings.categories || categories; } else await syncRemote(); }
+async function loadRemote() { const [{ data: rows, error: entriesError }, { data: settings, error: settingsError }] = await Promise.all([supabaseClient.from("finance_entries").select("data").eq("user_id", activeUser.id), supabaseClient.from("finance_settings").select("payments,categories").eq("user_id", activeUser.id).maybeSingle()]); if (entriesError || settingsError) { notice("Não foi possível sincronizar seus dados agora."); return; } const hasRemoteData = Boolean(settings) || Boolean(rows?.length); if (hasRemoteData) { entries = (rows || []).map((row) => row.data); if (settings) { payments = settings.payments || payments; categories = settings.categories || categories; } save(); } else if (entries.length || payments.length || Object.keys(categories).length) { await syncRemote(); } }
 
 function setAuthMode(mode) {
   authMode = mode;
@@ -149,3 +150,12 @@ $("#downloadReport").onclick = () => { const month = $("#reportMonth").value; co
 ["dashboardMonth", "expenseMonth", "reportMonth"].forEach((id) => $("#" + id).value = current);
 // Sempre comece pela autenticação; uma sessão persistida não pode abrir o painel sozinha.
 document.body.classList.add("login-open");
+
+// A sincronização só acontece depois de uma alteração do usuário. Assim, a
+// primeira renderização no celular nunca substitui os dados já salvos na nuvem.
+document.addEventListener("submit", (event) => {
+  if (event.target.matches("#entryForm, #paymentForm, #categoryForm")) saveAndSync();
+});
+document.addEventListener("click", (event) => {
+  if (event.target.closest("[data-delete], [data-toggle], [data-payment], [data-category-delete], #clearData")) saveAndSync();
+});
