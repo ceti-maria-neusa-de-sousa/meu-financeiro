@@ -29,8 +29,8 @@ async function loadProfile() {
 function setAuthMode(mode) {
   authMode = mode;
   document.querySelectorAll(".auth-tab").forEach((button) => button.classList.toggle("on", button.dataset.authMode === mode));
-  $(".register-only").hidden = true;
-  $("#authName").required = false;
+  $(".register-only").hidden = mode !== "register";
+  $("#authName").required = mode === "register";
   $("#authSubmit").textContent = mode === "register" ? "Criar conta e entrar" : "Entrar na plataforma";
   $("#authPassword").autocomplete = mode === "register" ? "new-password" : "current-password";
   $("#authMessage").textContent = "";
@@ -62,14 +62,15 @@ $("#loginForm").onsubmit = async (event) => {
   $("#authMessage").textContent = authMode === "register" ? "Criando sua conta..." : "Entrando...";
   try {
     if (authMode === "register") {
-      const { data, error } = await supabaseClient.auth.signUp({ email, password });
+      const name = $("#authName").value.trim();
+      const { data, error } = await supabaseClient.auth.signUp({ email, password, options: { data: { name } } });
       if (error) { $("#authMessage").textContent = error.message; return; }
       if (!data.user) { $("#authMessage").textContent = "Não foi possível criar a conta. Tente novamente."; return; }
       if (!data.session) {
         $("#authMessage").textContent = "Conta criada! Confirme o e-mail enviado e depois entre com sua senha.";
         return;
       }
-      activeUser = { id: data.user.id, email, name: "" };
+      activeUser = { id: data.user.id, email, name };
     } else {
       const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
       if (error || !data.user) {
