@@ -19,11 +19,18 @@ function saveAndSync() { save(); if (activeUser?.id) void syncRemote(); }
 async function syncRemote() { const userId = activeUser.id; const { error: removeError } = await supabaseClient.from("finance_entries").delete().eq("user_id", userId); if (removeError) { console.error("Erro ao apagar dados antigos:", removeError); notice("Não foi possível salvar seus dados na nuvem."); return; } const rows = entries.map((entry) => ({ id: String(entry.id), user_id: userId, data: entry })); if (rows.length) { const { error } = await supabaseClient.from("finance_entries").insert(rows); if (error) { console.error("Erro ao salvar movimentações:", error); notice("Não foi possível salvar seus dados na nuvem."); return; } } const { error } = await supabaseClient.from("finance_settings").upsert({ user_id: userId, payments, categories }); if (error) { console.error("Erro ao salvar configurações:", error); notice("Não foi possível salvar seus dados na nuvem."); } }
 async function loadRemote() { const [{ data: rows, error: entriesError }, { data: settings, error: settingsError }] = await Promise.all([supabaseClient.from("finance_entries").select("data").eq("user_id", activeUser.id), supabaseClient.from("finance_settings").select("payments,categories").eq("user_id", activeUser.id).maybeSingle()]); if (entriesError || settingsError) { console.error("Erro ao carregar dados:", entriesError || settingsError); notice("Não foi possível sincronizar seus dados agora."); return; } if (rows?.length) { entries = rows.map((row) => row.data); if (settings) { payments = settings.payments || payments; categories = settings.categories || categories; } save(); } else if (entries.length) { await syncRemote(); } else if (settings) { payments = settings.payments || payments; categories = settings.categories || categories; save(); } else { await syncRemote(); } }
 
+async function loadProfile() {
+  const { data, error } = await supabaseClient.from("profiles").select("name").eq("id", activeUser.id).maybeSingle();
+  if (error) { console.error("Erro ao carregar perfil:", error); return; }
+  activeUser.name = data?.name || activeUser.name || "";
+  $("#profileName").value = activeUser.name;
+  $("#profileEmail").value = activeUser.email;
+}
 function setAuthMode(mode) {
   authMode = mode;
   document.querySelectorAll(".auth-tab").forEach((button) => button.classList.toggle("on", button.dataset.authMode === mode));
-  $(".register-only").hidden = mode !== "register";
-  $("#authName").required = mode === "register";
+  $(".register-only").hidden = true;
+  $("#authName").required = false;
   $("#authSubmit").textContent = mode === "register" ? "Criar conta e entrar" : "Entrar na plataforma";
   $("#authPassword").autocomplete = mode === "register" ? "new-password" : "current-password";
   $("#authMessage").textContent = "";
@@ -32,6 +39,7 @@ document.querySelectorAll(".auth-tab").forEach((button) => button.onclick = () =
 async function showApp() {
   document.body.classList.remove("login-open");
   $("#authScreen").hidden = true; $("#app").hidden = false;
+  await loadProfile();
   document.querySelectorAll(".view").forEach((view) => view.classList.toggle("active", view.id === "dashboard"));
   document.querySelectorAll("nav a").forEach((link) => link.classList.toggle("on", link.dataset.view === "dashboard"));
   $("#pageTitle").textContent = `Olá, ${(activeUser.name || activeUser.email).split(" ")[0]} 👋`;
@@ -54,15 +62,14 @@ $("#loginForm").onsubmit = async (event) => {
   $("#authMessage").textContent = authMode === "register" ? "Criando sua conta..." : "Entrando...";
   try {
     if (authMode === "register") {
-      const name = $("#authName").value.trim();
-      const { data, error } = await supabaseClient.auth.signUp({ email, password, options: { data: { name } } });
+      const { data, error } = await supabaseClient.auth.signUp({ email, password });
       if (error) { $("#authMessage").textContent = error.message; return; }
       if (!data.user) { $("#authMessage").textContent = "Não foi possível criar a conta. Tente novamente."; return; }
       if (!data.session) {
         $("#authMessage").textContent = "Conta criada! Confirme o e-mail enviado e depois entre com sua senha.";
         return;
       }
-      activeUser = { id: data.user.id, email, name };
+      activeUser = { id: data.user.id, email, name: "" };
     } else {
       const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
       if (error || !data.user) {
@@ -74,7 +81,9 @@ $("#loginForm").onsubmit = async (event) => {
       activeUser = { id: data.user.id, email: data.user.email, name: data.user.user_metadata.name || data.user.email };
     }
 
-    const { error: profileError } = await supabaseClient.from("profiles").upsert({ id: activeUser.id, name: activeUser.name || "" });
+    const { error: profileError } = authMode === "register"
+      ? await supabaseClient.from("profiles").upsert({ id: activeUser.id, name: activeUser.name || "" })
+      : { error: null };
     if (profileError) console.error("Não foi possível salvar o perfil:", profileError);
     await showApp();
   } catch (error) {
@@ -83,6 +92,21 @@ $("#loginForm").onsubmit = async (event) => {
   } finally {
     submit.disabled = false;
   }
+};
+$("#perfil").innerHTML = '<div class="heading"><div><h2>Meu perfil</h2><p>Gerencie as informa&#231;&#245;es da sua conta.</p></div></div><article class="panel profile-panel"><h2>Dados pessoais</h2><form id="profileForm" class="profile-form"><label>Nome de exibi&#231;&#227;o<input id="profileName" autocomplete="name" placeholder="Como deseja ser chamado?"></label><label>E-mail<input id="profileEmail" type="email" disabled></label><button class="submit">Salvar perfil</button><p id="profileMessage" class="auth-message" aria-live="polite"></p></form></article>';
+$("#profileForm").onsubmit = async (event) => {
+  event.preventDefault();
+  const name = $("#profileName").value.trim();
+  const button = $("#profileForm button");
+  button.disabled = true;
+  const { error } = await supabaseClient.from("profiles").upsert({ id: activeUser.id, name });
+  button.disabled = false;
+  if (error) { $("#profileMessage").textContent = "Nao foi possivel salvar o perfil."; return; }
+  if (error) { $("#profileMessage").textContent = "NÃ£o foi possÃ­vel salvar o perfil."; return; }
+  activeUser.name = name;
+  $("#profileMessage").textContent = "Perfil salvo com sucesso.";
+  $("#pageTitle").textContent = `OlÃ¡, ${(name || activeUser.email).split(" ")[0]} ðŸ‘‹`;
+  $("#pageTitle").textContent = `Ol\u00e1, ${(name || activeUser.email).split(" ")[0]} \ud83d\udc4b`;
 };
 $("#logout").onclick = async () => { await supabaseClient.auth.signOut(); activeUser = null; document.body.classList.add("login-open"); $("#app").hidden = true; $("#authScreen").hidden = false; $("#loginForm").reset(); setAuthMode("login"); };
 
@@ -99,18 +123,27 @@ function chart(grossBalance, expenses, netBalance) {
   $("#monthChart").innerHTML = `<div class="pie" style="background:conic-gradient(${slices})"><div class="pie-center"><span>Saldo líquido</span><strong class="${netBalance < 0 ? "negative-text" : ""}">${money(netBalance)}</strong></div></div><div class="pie-legend">${movements.map((item) => `<div><i style="background:${item.color}"></i><span>${item.label}</span><b>${money(item.value)}</b><small>Resumo do mês</small></div>`).join("")}</div>`;
 }
 function totals() {
-  const selected = entries.filter((entry) => inMonth(entry, $("#dashboardMonth").value));
+  const selectedMonth = $("#dashboardMonth").value;
+  const selected = entries.filter((entry) => inMonth(entry, selectedMonth));
+  const previous = entries.filter((entry) => entry.date.slice(0, 7) < selectedMonth);
+  const carriedBalance = sum(previous.filter((entry) => entry.type === "receita"))
+    - sum(previous.filter((entry) => entry.type === "despesa" && entry.status === "paid"))
+    - sum(previous.filter((entry) => entry.type === "investimento"));
   const income = sum(selected.filter((entry) => entry.type === "receita"));
   const paid = sum(selected.filter((entry) => entry.type === "despesa" && entry.status === "paid"));
   const unpaid = sum(selected.filter((entry) => entry.type === "despesa" && entry.status === "unpaid"));
   const investments = sum(selected.filter((entry) => entry.type === "investimento"));
-  const result = income - paid - investments;
+  const monthlyResult = income - paid - investments;
+  const result = carriedBalance + monthlyResult;
+  $(".balance p").textContent = "Saldo dispon\u00edvel";
   $("#incomeTotal").textContent = money(income); $("#expenseTotal").textContent = money(paid); $("#billTotal").textContent = money(unpaid); $("#investmentTotal").textContent = money(investments); $("#balance").textContent = money(result);
   $("#balanceHint").textContent = result < 0 ? "Atenção: você ficou no vermelho neste mês." : "Você está no positivo neste mês.";
   $(".balance").classList.toggle("negative", result < 0);
   $("#monthStatus").textContent = unpaid ? `${money(unpaid)} em despesas pendentes.` : "Sem despesas pendentes.";
   $("#summaryMessage").textContent = selected.length ? `Saldo atual: ${money(result)}. O gráfico mostra a distribuição das movimentações registradas.` : "Nenhuma movimentação no mês selecionado.";
-  chart(income, paid + unpaid, result);
+  $("#summaryMessage").textContent = `Saldo trazido do mÃªs anterior: ${money(carriedBalance)}. Saldo disponÃ­vel: ${money(result)}.`;
+  $("#summaryMessage").textContent = `Saldo trazido do m\u00eas anterior: ${money(carriedBalance)}. Saldo dispon\u00edvel: ${money(result)}.`;
+  chart(income, paid, result);
 }
 function card(entry) {
   const icon = { receita: "↗", despesa: "↘", investimento: "◈" }[entry.type];
@@ -136,6 +169,7 @@ function render() {
   ui(); totals(); save();
 }
 function plusMonths(date, amount) { const value = new Date(date + "T12:00"); value.setMonth(value.getMonth() + amount); return value.toISOString().slice(0, 10); }
+document.querySelector("nav").insertAdjacentHTML("beforeend", '<a data-view="perfil">Perfil</a>');
 document.querySelectorAll("nav a").forEach((link) => link.onclick = () => { document.querySelectorAll(".view").forEach((view) => view.classList.remove("active")); $("#" + link.dataset.view).classList.add("active"); document.querySelectorAll("nav a").forEach((item) => item.classList.remove("on")); link.classList.add("on"); $("#pageTitle").textContent = link.textContent; });
 document.querySelectorAll(".open").forEach((button) => button.onclick = () => { const type = button.dataset.type; $("#entryForm").reset(); $("#entryType").value = type; $("#formTitle").textContent = ({ receita: "Nova receita", despesa: "Nova despesa", investimento: "Novo investimento" })[type]; $("#date").value = now.toISOString().slice(0, 10); $("#expenseFields").hidden = type !== "despesa"; $("#investmentFields").hidden = type !== "investimento"; $("#amountLabel").childNodes[0].nodeValue = type === "despesa" ? "Valor total (R$)" : "Valor (R$)"; ui(); $("#entryDialog").showModal(); });
 $("#closeDialog").onclick = () => $("#entryDialog").close();
